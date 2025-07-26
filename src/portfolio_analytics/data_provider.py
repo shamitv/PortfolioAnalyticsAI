@@ -19,7 +19,7 @@ class DataProvider:
     Currently supports Yahoo Finance with plans to add other data sources.
     """
     
-    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db'):
+    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False):
         """
         Initialize data provider.
         
@@ -27,11 +27,13 @@ class DataProvider:
             source: Data source ('yahoo', 'alpha_vantage', 'quandl')
             cache: If True, cache data to a local SQLite database.
             cache_db: Path to the SQLite database file.
+            debug: If True, print debug/troubleshooting messages.
         """
         self.source = source
         self._validate_source()
         self.cache = cache
         self.db_conn = None
+        self.debug = debug
         if self.cache:
             self.db_conn = sqlite3.connect(cache_db)
             self._create_cache_table()
@@ -67,7 +69,7 @@ class DataProvider:
                       end_date: Optional[str] = None,
                       interval: str = "1d") -> pd.DataFrame:
         """
-        Fetch historical price data for given symbols.
+        Fetch historical price data for given symbols, utilizing cache if enabled.
         
         Args:
             symbols: Stock symbol(s) to fetch data for
@@ -84,26 +86,87 @@ class DataProvider:
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
 
-        if self.cache:
-            try:
-                cached_data = self._load_from_cache(symbols, start_date, end_date)
-                if not cached_data.empty:
-                    # Check if all symbols are present and data covers the full range
-                    if all(s in cached_data.columns for s in symbols):
-                         if cached_data.index.min().strftime('%Y-%m-%d') <= start_date and cached_data.index.max().strftime('%Y-%m-%d') >= end_date:
-                            return cached_data[symbols]
+        all_symbol_data = []
 
-            except Exception as e:
-                print(f"Cache read failed: {e}")
-
-        
-        if self.source == "yahoo":
-            data = self._fetch_yahoo_data(symbols, start_date, end_date, interval)
+        for symbol in symbols:
+            symbol_data_df = pd.DataFrame()
             if self.cache:
-                self._save_to_cache(data)
-            return data
-        else:
-            raise NotImplementedError(f"Data fetching for {self.source} not yet implemented")
+                # Attempt to load whatever exists in cache for the symbol
+                cached_data = self._load_from_cache([symbol], start_date, end_date)
+                if not cached_data.empty:
+                    symbol_data_df = cached_data
+
+            # Determine what data is missing
+            missing_ranges = self._get_missing_date_ranges(symbol_data_df, start_date, end_date)
+
+            if missing_ranges:
+                if self.debug:
+                    print(f"Fetching {symbol} for missing ranges: {missing_ranges} from {self.source}.")
+                fetched_data_list = []
+                for r_start, r_end in missing_ranges:
+                    if self.source == "yahoo":
+                        fetched_range_data = self._fetch_yahoo_data([symbol], r_start, r_end, interval)
+                        if not fetched_range_data.empty:
+                            fetched_data_list.append(fetched_range_data)
+                    else:
+                        raise NotImplementedError(f"Data fetching for {self.source} not yet implemented")
+
+                if fetched_data_list:
+                    newly_fetched_data = pd.concat(fetched_data_list)
+                    if self.cache:
+                        self._save_to_cache(newly_fetched_data)
+                    
+                    # Combine cached and newly fetched data
+                    symbol_data_df = pd.concat([symbol_data_df, newly_fetched_data]).sort_index()
+                    # Remove duplicates, keeping the newly fetched data
+                    symbol_data_df = symbol_data_df[~symbol_data_df.index.duplicated(keep='last')]
+
+            else:
+                if self.debug:
+                    print(f"Loading {symbol} from cache.")
+
+            if not symbol_data_df.empty:
+                all_symbol_data.append(symbol_data_df)
+
+        if not all_symbol_data:
+            return pd.DataFrame()
+
+        # Combine all dataframes
+        final_df = pd.concat(all_symbol_data, axis=1)
+        return final_df.sort_index()
+
+    def _get_missing_date_ranges(self, df: pd.DataFrame, start_date: str, end_date: str) -> List[tuple]:
+        """
+        Identifies missing date ranges in a dataframe.
+        """
+        start_date_dt = pd.to_datetime(start_date)
+        end_date_dt = pd.to_datetime(end_date)
+        
+        if df.empty:
+            return [(start_date, end_date)]
+
+        # Get business days for the full range
+        full_range = pd.bdate_range(start=start_date_dt, end=end_date_dt)
+        
+        # Find dates that are missing from the dataframe's index
+        missing_dates = full_range.difference(df.index)
+
+        if missing_dates.empty:
+            return []
+
+        # Group consecutive missing dates into ranges
+        gaps = []
+        if not missing_dates.empty:
+            # Find blocks of consecutive dates
+            breaks = np.where(np.diff(missing_dates.to_julian_date()) > 1)[0] + 1
+            # Split the array of missing dates at these breaks
+            date_blocks = np.split(missing_dates, breaks)
+            
+            for block in date_blocks:
+                if not block.empty:
+                    gaps.append((block[0].strftime('%Y-%m-%d'), block[-1].strftime('%Y-%m-%d')))
+        
+        return gaps
 
     def _load_from_cache(self, symbols: List[str], start_date: str, end_date: str) -> pd.DataFrame:
         """Load price data from cache."""
@@ -140,18 +203,15 @@ class DataProvider:
             print(f"Failed to cache data: {e}")
 
     def _upsert_sqlite(self, table, conn, keys, data_iter):
-        from sqlalchemy.dialects.sqlite import insert
-        from sqlalchemy import table as sql_table, column
-        
-        sql_table_obj = sql_table(table.name, column('Date'), column('Symbol'), column('Close'))
-        
+        # conn is a pandas SQLDatabase object, which has an execute method
         for data in data_iter:
-            stmt = insert(sql_table_obj).values(data)
-            stmt = stmt.on_conflict_do_update(
-                index_elements=['Date', 'Symbol'],
-                set_={'Close': stmt.excluded.Close}
-            )
-            conn.execute(stmt)
+            # Assuming data is a tuple in the order of columns
+            # The columns are Date, Symbol, Close
+            conn.execute(f'''
+                INSERT INTO {table.name} (Date, Symbol, Close)
+                VALUES (?, ?, ?)
+                ON CONFLICT(Date, Symbol) DO UPDATE SET Close=excluded.Close
+            ''', data)
     
     def _fetch_yahoo_data(self, 
                          symbols: List[str],
@@ -170,12 +230,17 @@ class DataProvider:
         Returns:
             DataFrame with adjusted close prices
         """
+        # yfinance end date is exclusive, so we need to add one day to it.
+        end_date_dt = pd.to_datetime(end_date) + timedelta(days=1)
+        end_date_str = end_date_dt.strftime('%Y-%m-%d')
+
         try:
-            # Download data for all symbols
+            # yfinance sometimes raises YFPricesMissingError for single days that are holidays
+            # We can suppress this and just return an empty dataframe.
             data = yf.download(
                 tickers=symbols,
                 start=start_date,
-                end=end_date,
+                end=end_date_str,
                 interval=interval,
                 group_by='ticker',
                 auto_adjust=True,
@@ -183,36 +248,40 @@ class DataProvider:
                 threads=True,
                 proxy=None
             )
-            
-            if len(symbols) == 1:
-                # Single symbol - return Close column
-                if 'Close' in data.columns:
-                    result = pd.DataFrame({symbols[0]: data['Close']})
-                else:
-                    result = pd.DataFrame({symbols[0]: data})
-            else:
-                # Multiple symbols - extract Close prices
-                close_prices = {}
-                for symbol in symbols:
-                    if symbol in data.columns.get_level_values(0):
-                        close_prices[symbol] = data[symbol]['Close']
-                    else:
-                        print(f"Warning: No data found for symbol {symbol}")
-                
-                result = pd.DataFrame(close_prices)
-            
-            # Remove any rows with all NaN values
-            result = result.dropna(how='all')
-            
-            if result.empty:
-                raise ValueError("No valid data retrieved for the given symbols and date range")
-            
-            return result
-            
         except Exception as e:
-            raise ValueError(f"Error fetching data from Yahoo Finance: {str(e)}")
-    
-    def get_company_info(self, symbol: str) -> Dict:
+            # This is a broad exception, but yfinance can be unpredictable
+            # For our purpose of filling cache gaps, failing silently is acceptable.
+            if self.debug:
+                print(f"Could not download data for {symbols} from {start_date} to {end_date}: {e}")
+            return pd.DataFrame(columns=symbols)
+            
+        if data.empty:
+            return pd.DataFrame(columns=symbols)
+
+        # The 'group_by' argument creates a multi-level column index.
+        # We need to extract the 'Close' price for each symbol.
+        close_prices = {}
+        for symbol in symbols:
+            # Check if the symbol exists in the downloaded data
+            if symbol in data.columns:
+                # For single symbol downloads, the structure is simpler
+                if isinstance(data.columns, pd.MultiIndex):
+                    symbol_close = data[symbol]['Close']
+                else:
+                    symbol_close = data['Close']
+                
+                # Remove NaN values which represent days with no trading
+                close_prices[symbol] = symbol_close.dropna()
+
+        if not close_prices:
+            return pd.DataFrame(columns=symbols)
+
+        # Combine the 'Close' price series into a single DataFrame
+        result_df = pd.DataFrame(close_prices)
+        result_df.index.name = 'Date'
+        return result_df
+
+    def get_company_info(self, symbol: str) -> Optional[Dict]:
         """
         Get company information for a given symbol.
         
