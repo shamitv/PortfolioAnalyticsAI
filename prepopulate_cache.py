@@ -49,10 +49,21 @@ def get_us_trading_holidays():
     current_year = datetime.now().year
     start_year = 2000
     
-    # Get holidays for the date range
+    # Get holidays for the date range using the correct API
     start_date = f'{start_year}-01-01'
     end_date = f'{current_year}-12-31'
-    holidays = nyse.holidays(start_date=start_date, end_date=end_date)
+    
+    # Use the schedule method to get valid trading sessions, then get holidays
+    schedule = nyse.schedule(start_date=start_date, end_date=end_date)
+    
+    # Get all business days in the range
+    all_business_days = pd.bdate_range(start=start_date, end=end_date)
+    
+    # Get actual trading days from the schedule
+    trading_days = schedule.index.normalize()
+    
+    # Find holidays (business days that are not trading days)
+    holidays = all_business_days.difference(trading_days)
     
     # Return list of holiday dates from 2000 to current year
     return holidays.to_list()
@@ -121,8 +132,18 @@ def prepopulate_market_data_cache():
     populate_sector_metadata(conn, sector_etfs_path)
     conn.close()
 
-    # Initialize DataProvider with caching enabled and debug output on
-    data_provider = DataProvider(cache=True, cache_db=db_path, debug=True)
+    # Get US trading holidays from 2000 to current year
+    trading_holidays = get_us_trading_holidays()
+    trading_holidays_str = [holiday.strftime('%Y-%m-%d') for holiday in trading_holidays]
+    print(f"Retrieved {len(trading_holidays)} US trading holidays from 2000 to current year.")
+
+    # Initialize DataProvider with caching enabled, debug output on, and trading holidays
+    data_provider = DataProvider(
+        cache=True, 
+        cache_db=db_path, 
+        debug=True, 
+        trading_holidays=trading_holidays_str
+    )
 
     # Get the list of symbols from the database
     conn = sqlite3.connect(db_path)
@@ -156,6 +177,10 @@ def prepopulate_market_data_cache():
     print(f"Fetching data for {len(all_symbols)} symbols from {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}...")
 
     # Iterate over all symbols (S&P 500 + sector ETFs + risk-free rate) and fetch data
+    delisted_count = 0
+    error_count = 0
+    success_count = 0
+    
     for i, symbol in enumerate(all_symbols):
         if symbol in sector_etf_symbols:
             symbol_type = "sector ETF"
@@ -171,10 +196,18 @@ def prepopulate_market_data_cache():
                 start_date=start_date.strftime('%Y-%m-%d'),
                 end_date=end_date.strftime('%Y-%m-%d')
             )
+            success_count += 1
         except Exception as e:
-            print(f"Could not fetch data for {symbol}: {e}")
+            error_msg = str(e)
+            if "possibly delisted" in error_msg or "no price data found" in error_msg:
+                print(f"DELISTED/NO DATA: {symbol} - {error_msg}")
+                delisted_count += 1
+            else:
+                print(f"ERROR: {symbol} - {error_msg}")
+                error_count += 1
 
     print("\nCache pre-population complete.")
+    print(f"Summary: {success_count} successful, {delisted_count} delisted/no data, {error_count} other errors")
 
     # Print the size of the database file
     db_size = os.path.getsize(db_path)
