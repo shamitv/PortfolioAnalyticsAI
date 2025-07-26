@@ -459,3 +459,37 @@ class DataProvider:
             start_date=start_date,
             end_date=end_date
         )
+    
+    def get_risk_free_rate_metadata(self) -> Dict[str, str]:
+        """
+        Return metadata about the risk-free return instrument.
+        
+        Returns:
+            Dictionary containing metadata about the risk-free rate proxy:
+            - symbol: The ticker symbol
+            - name: Official name of the instrument
+            - description: Detailed description of the instrument and its use
+            - data_source: Source of the data
+            - currency: Currency denomination
+            - frequency: Data frequency
+        """
+        return {
+            'symbol': '^IRX',
+            'name': '13-week (3-month) U.S. Treasury bill yield',
+            'description': (
+                'CBOE 13-Week Treasury Bill Yield Index, which reflects the annualized '
+                'market yield on U.S. three-month Treasury bills and is widely used as a '
+                'proxy for the short-term risk-free rate in financial models. The index '
+                'is officially named "13 WEEK TREASURY BILL (^IRX)" and is provided by '
+                'CBOE Global Indices, tracking the yield on three-month U.S. Treasury bills '
+                'quoted in USD. These bills are sold at a discount to par in weekly auctions '
+                'and their yield represents the smallest return investors accept for virtually '
+                'risk-free, short-term lending to the U.S. government.'
+            ),
+            'data_source': 'CBOE Global Indices via Yahoo Finance',
+            'currency': 'USD',
+            'frequency': 'Daily',
+            'asset_type': 'Treasury Bill Yield',
+            'maturity': '3 months (13 weeks)',
+            'issuer': 'U.S. Treasury Department'
+        }
