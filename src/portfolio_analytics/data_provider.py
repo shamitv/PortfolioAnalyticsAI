@@ -65,7 +65,7 @@ class DataProvider:
     Currently supports Yahoo Finance with plans to add other data sources.
     """
     
-    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False, trading_holidays: Optional[List[str]] = None):
+    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = None, debug: bool = False, trading_holidays: Optional[List[str]] = None):
         """
         Initialize data provider.
         
@@ -82,7 +82,14 @@ class DataProvider:
         self.db_conn = None
         self.debug = debug
         self.trading_holidays = []
-        
+        if cache_db is None:
+            # Use the market_data.db file from sample_data directory if it exists
+            sample_data_dir = os.path.join(os.path.dirname(__file__), 'sample_data')
+            market_data_path = os.path.join(sample_data_dir, 'market_data.db')
+            if os.path.exists(market_data_path):
+                cache_db = market_data_path
+            else:
+                cache_db = 'portfolio_cache.db'
         # Set trading holidays if provided
         if trading_holidays:
             self.set_trading_holidays(trading_holidays)
