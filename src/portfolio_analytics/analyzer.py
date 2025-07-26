@@ -32,18 +32,35 @@ class Analyzer:
     2. Visualization images optimized for LLM analysis
     """
     
-    def __init__(self, portfolio: Portfolio):
+    def __init__(self, 
+                 portfolio: Portfolio,
+                 benchmark_data: Optional[pd.Series] = None,
+                 risk_free_data: Optional[pd.Series] = None):
         """
-        Initialize the analyzer with a portfolio.
+        Initialize the analyzer with a portfolio and optional benchmark/risk-free data.
         
         Args:
             portfolio: Portfolio object to analyze
+            benchmark_data: Optional benchmark price time series for comparison
+            risk_free_data: Optional risk-free return time series (e.g., Treasury rates)
         """
         self.portfolio = portfolio
         self.performance_analyzer = PerformanceAnalyzer()
         self.risk_model = RiskModel()
         self.visualizer = PortfolioVisualizer()
         self.optimizer = PortfolioOptimizer()
+        
+        # Store benchmark and risk-free data
+        self.benchmark_data = benchmark_data
+        self.risk_free_data = risk_free_data
+        
+        # Calculate benchmark returns if price data provided
+        self.benchmark_returns = None
+        if benchmark_data is not None:
+            self.benchmark_returns = benchmark_data.pct_change().dropna()
+        
+        # Process risk-free data - assume it's already in return format or convert if needed
+        self.risk_free_returns = risk_free_data
         
         # Storage for generated content
         self.metrics = {}
@@ -52,13 +69,13 @@ class Analyzer:
         
     def generate_comprehensive_analysis(self, 
                                       benchmark_returns: Optional[pd.Series] = None,
-                                      risk_free_rate: float = 0.02) -> Dict[str, Any]:
+                                      risk_free_rate: Optional[float] = None) -> Dict[str, Any]:
         """
         Generate complete analysis including metrics, Greeks, and visualizations.
         
         Args:
-            benchmark_returns: Benchmark returns for comparison
-            risk_free_rate: Risk-free rate for calculations
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
+            risk_free_rate: Risk-free rate for calculations (overrides stored risk_free_returns if provided)
             
         Returns:
             Dictionary containing all analysis results
@@ -66,12 +83,16 @@ class Analyzer:
         if self.portfolio.returns is None:
             raise ValueError("Portfolio data not loaded. Call portfolio.load_data() first.")
         
+        # Use provided parameters or fall back to stored data
+        benchmark = benchmark_returns if benchmark_returns is not None else self.benchmark_returns
+        risk_free = self._get_risk_free_rate(risk_free_rate)
+        
         # Generate all metrics and Greeks
-        self.generate_metrics(benchmark_returns, risk_free_rate)
+        self.generate_metrics(benchmark, risk_free)
         self.generate_greeks()
         
         # Generate all visualizations
-        self.generate_visualizations(benchmark_returns)
+        self.generate_visualizations(benchmark)
         
         return {
             'metrics': self.metrics,
@@ -80,29 +101,57 @@ class Analyzer:
             'portfolio_summary': self._generate_portfolio_summary()
         }
     
+    def _get_risk_free_rate(self, override_rate: Optional[float] = None) -> float:
+        """
+        Get the appropriate risk-free rate.
+        
+        Args:
+            override_rate: Optional override rate
+            
+        Returns:
+            Risk-free rate to use
+        """
+        if override_rate is not None:
+            return override_rate
+        
+        if self.risk_free_returns is not None:
+            # If we have time series data, use the mean
+            if hasattr(self.risk_free_returns, 'mean'):
+                return self.risk_free_returns.mean()
+            else:
+                # If it's a single value
+                return float(self.risk_free_returns)
+        
+        # Default fallback
+        return 0.02
+    
     def generate_metrics(self, 
                         benchmark_returns: Optional[pd.Series] = None,
-                        risk_free_rate: float = 0.02) -> Dict[str, Any]:
+                        risk_free_rate: Optional[float] = None) -> Dict[str, Any]:
         """
         Generate comprehensive portfolio metrics.
         
         Args:
-            benchmark_returns: Benchmark returns for comparison
-            risk_free_rate: Risk-free rate
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
+            risk_free_rate: Risk-free rate (overrides stored risk_free_returns if provided)
             
         Returns:
             Dictionary of metrics
         """
         portfolio_returns = (self.portfolio.returns * self.portfolio.weights).sum(axis=1)
         
+        # Use provided parameters or fall back to stored data
+        benchmark = benchmark_returns if benchmark_returns is not None else self.benchmark_returns
+        risk_free = self._get_risk_free_rate(risk_free_rate)
+        
         # Performance metrics
         performance_metrics = self.performance_analyzer.calculate_metrics(
-            portfolio_returns, benchmark_returns, risk_free_rate
+            portfolio_returns, benchmark, risk_free
         )
         
         # Risk metrics
         risk_metrics = self.risk_model.calculate_risk_metrics(
-            portfolio_returns, [0.95, 0.99], risk_free_rate
+            portfolio_returns, [0.95, 0.99], risk_free
         )
         
         # Portfolio-specific metrics
@@ -175,19 +224,22 @@ class Analyzer:
         Generate all visualization images as base64 encoded strings for LLM consumption.
         
         Args:
-            benchmark_returns: Benchmark returns for comparison
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
             
         Returns:
             Dictionary of base64 encoded images
         """
         portfolio_returns = (self.portfolio.returns * self.portfolio.weights).sum(axis=1)
         
+        # Use provided benchmark or fall back to stored benchmark
+        benchmark = benchmark_returns if benchmark_returns is not None else self.benchmark_returns
+        
         self.visualizations = {
             'price_history': self._create_price_history_chart(),
             'returns_distribution': self._create_returns_distribution_chart(portfolio_returns),
             'correlation_matrix': self._create_correlation_matrix_chart(),
             'portfolio_composition': self._create_portfolio_composition_chart(),
-            'cumulative_returns': self._create_cumulative_returns_chart(portfolio_returns, benchmark_returns),
+            'cumulative_returns': self._create_cumulative_returns_chart(portfolio_returns, benchmark),
             'drawdown_analysis': self._create_drawdown_chart(portfolio_returns),
             'risk_return_scatter': self._create_risk_return_scatter(),
             'efficient_frontier': self._create_efficient_frontier_chart(),
@@ -315,8 +367,20 @@ class Analyzer:
     
     def _calculate_rho(self, returns: pd.Series) -> float:
         """Calculate portfolio rho (interest rate sensitivity)."""
-        # Simplified rho calculation based on duration-like measure
-        # Using inverse relationship with returns
+        if self.risk_free_returns is not None and hasattr(self.risk_free_returns, '__len__'):
+            # Use actual risk-free rate changes if available
+            # Align the risk-free data with portfolio returns
+            aligned_rf = self.risk_free_returns.reindex(returns.index, method='ffill')
+            if not aligned_rf.isna().all():
+                # Calculate correlation between portfolio returns and risk-free rate changes
+                rf_changes = aligned_rf.diff().dropna()
+                aligned_returns = returns.reindex(rf_changes.index)
+                
+                if len(rf_changes) > 1 and len(aligned_returns) > 1:
+                    rho = np.corrcoef(aligned_returns.dropna(), rf_changes)[0, 1]
+                    return rho * returns.std() * 100  # Scaled sensitivity
+        
+        # Fallback: Simplified rho calculation based on duration-like measure
         time_weights = np.arange(1, len(returns) + 1) / len(returns)
         weighted_return = np.sum(returns * time_weights)
         
@@ -366,7 +430,12 @@ class Analyzer:
             ax.plot(self.portfolio.data.index, self.portfolio.data[column], 
                    label=column, linewidth=2)
         
-        ax.set_title('Portfolio Assets Price History', fontsize=16, fontweight='bold')
+        # Add benchmark data if available
+        if self.benchmark_data is not None:
+            ax.plot(self.benchmark_data.index, self.benchmark_data, 
+                   label='Benchmark', linewidth=2, linestyle='--', color='red', alpha=0.8)
+        
+        ax.set_title('Portfolio Assets and Benchmark Price History', fontsize=16, fontweight='bold')
         ax.set_xlabel('Date')
         ax.set_ylabel('Price')
         ax.legend()
@@ -724,7 +793,7 @@ class Analyzer:
     
     def _generate_portfolio_summary(self) -> Dict[str, Any]:
         """Generate a comprehensive portfolio summary."""
-        return {
+        summary = {
             'portfolio_name': self.portfolio.name,
             'number_of_assets': len(self.portfolio.symbols),
             'assets': self.portfolio.symbols,
@@ -732,8 +801,27 @@ class Analyzer:
             'data_start_date': str(self.portfolio.data.index.min().date()) if self.portfolio.data is not None else None,
             'data_end_date': str(self.portfolio.data.index.max().date()) if self.portfolio.data is not None else None,
             'total_observations': len(self.portfolio.returns) if self.portfolio.returns is not None else 0,
-            'analysis_timestamp': datetime.now().isoformat()
+            'analysis_timestamp': datetime.now().isoformat(),
+            'has_benchmark_data': self.benchmark_data is not None,
+            'has_risk_free_data': self.risk_free_data is not None
         }
+        
+        # Add benchmark data info if available
+        if self.benchmark_data is not None:
+            summary['benchmark_start_date'] = str(self.benchmark_data.index.min().date())
+            summary['benchmark_end_date'] = str(self.benchmark_data.index.max().date())
+            summary['benchmark_observations'] = len(self.benchmark_data)
+        
+        # Add risk-free data info if available
+        if self.risk_free_data is not None:
+            if hasattr(self.risk_free_data, 'index'):
+                summary['risk_free_start_date'] = str(self.risk_free_data.index.min().date())
+                summary['risk_free_end_date'] = str(self.risk_free_data.index.max().date())
+                summary['risk_free_observations'] = len(self.risk_free_data)
+            else:
+                summary['risk_free_value'] = float(self.risk_free_data)
+        
+        return summary
     
     # Helper methods for metrics calculations
     def _calculate_concentration(self) -> float:
@@ -863,31 +951,34 @@ class Analyzer:
     
     def export_for_llm(self, 
                       benchmark_returns: Optional[pd.Series] = None,
-                      risk_free_rate: float = 0.02,
+                      risk_free_rate: Optional[float] = None,
                       output_format: str = "comprehensive") -> Dict[str, Any]:
         """
         Export all analysis results in a format optimized for LLM consumption.
         
         Args:
-            benchmark_returns: Benchmark returns for comparison
-            risk_free_rate: Risk-free rate
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
+            risk_free_rate: Risk-free rate (overrides stored risk_free_returns if provided)
             output_format: Export format ('comprehensive', 'summary', 'metrics_only', 'visuals_only')
             
         Returns:
             Dictionary formatted for LLM analysis
         """
+        # Use provided parameters or fall back to stored data
+        benchmark = benchmark_returns if benchmark_returns is not None else self.benchmark_returns
+        
         if output_format == "comprehensive":
-            return self.generate_comprehensive_analysis(benchmark_returns, risk_free_rate)
+            return self.generate_comprehensive_analysis(benchmark, risk_free_rate)
         elif output_format == "summary":
             return {
                 'portfolio_summary': self._generate_portfolio_summary(),
                 'key_metrics': self._extract_key_metrics(),
-                'visualizations': self.generate_visualizations(benchmark_returns)
+                'visualizations': self.generate_visualizations(benchmark)
             }
         elif output_format == "metrics_only":
-            return self.generate_metrics(benchmark_returns, risk_free_rate)
+            return self.generate_metrics(benchmark, risk_free_rate)
         elif output_format == "visuals_only":
-            return self.generate_visualizations(benchmark_returns)
+            return self.generate_visualizations(benchmark)
         else:
             raise ValueError(f"Unknown output format: {output_format}")
     
@@ -909,7 +1000,7 @@ class Analyzer:
     
     def generate_openai_messages(self, 
                                benchmark_returns: Optional[pd.Series] = None,
-                               risk_free_rate: float = 0.02,
+                               risk_free_rate: Optional[float] = None,
                                analysis_request: str = "Analyze this portfolio and provide investment insights",
                                include_visualizations: bool = True,
                                output_format: str = "comprehensive") -> List[Dict[str, Any]]:
@@ -917,8 +1008,8 @@ class Analyzer:
         Generate OpenAI-compatible messages for LLM analysis.
         
         Args:
-            benchmark_returns: Benchmark returns for comparison
-            risk_free_rate: Risk-free rate for calculations
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
+            risk_free_rate: Risk-free rate for calculations (overrides stored risk_free_returns if provided)
             analysis_request: The analysis request/prompt for the LLM
             include_visualizations: Whether to include base64 images for vision models
             output_format: Export format ('comprehensive', 'summary', 'metrics_only', 'visuals_only')
@@ -1108,14 +1199,14 @@ Provide clear, professional analysis with specific recommendations backed by the
     def generate_simple_message(self, 
                               analysis_request: str = "Analyze this portfolio and provide investment insights",
                               benchmark_returns: Optional[pd.Series] = None,
-                              risk_free_rate: float = 0.02) -> List[Dict[str, str]]:
+                              risk_free_rate: Optional[float] = None) -> List[Dict[str, str]]:
         """
         Generate simple text-only messages for non-vision LLM models.
         
         Args:
             analysis_request: The analysis request/prompt for the LLM
-            benchmark_returns: Benchmark returns for comparison
-            risk_free_rate: Risk-free rate for calculations
+            benchmark_returns: Benchmark returns for comparison (overrides stored benchmark_returns if provided)
+            risk_free_rate: Risk-free rate for calculations (overrides stored risk_free_returns if provided)
             
         Returns:
             List of simple message dictionaries (text only)
