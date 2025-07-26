@@ -13,6 +13,22 @@ import os
 
 
 class DataProvider:
+
+
+
+    def set_trading_holidays(self, holidays: List[str]) -> None:
+        """
+        Set the list of trading holidays.
+        
+        Args:
+            holidays: List of holiday dates in 'YYYY-MM-DD' format.
+        """
+        if holidays:
+            self.trading_holidays = [pd.to_datetime(holiday).date() for holiday in holidays]
+        else:
+            self.trading_holidays = []
+
+
     def copy_sample_data(self, target_dir: str) -> None:
         """
         Copy sample data files bundled with the package to a specified directory.
@@ -38,6 +54,9 @@ class DataProvider:
                     shutil.copy2(src_path, dst_path)
                     if self.debug:
                         print(f"Copied {src_path} to {dst_path}")
+                except FileExistsError:
+                    if self.debug:
+                        print(f"File already exists: {dst_path}")
                 except Exception as e:
                     raise OSError(f"Failed to copy {src_path} to {dst_path}: {e}")
     """
@@ -46,7 +65,7 @@ class DataProvider:
     Currently supports Yahoo Finance with plans to add other data sources.
     """
     
-    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False):
+    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False, trading_holidays: Optional[List[str]] = None):
         """
         Initialize data provider.
         
@@ -55,12 +74,19 @@ class DataProvider:
             cache: If True, cache data to a local SQLite database.
             cache_db: Path to the SQLite database file.
             debug: If True, print debug/troubleshooting messages.
+            trading_holidays: List of trading holiday dates in 'YYYY-MM-DD' format.
         """
         self.source = source
         self._validate_source()
         self.cache = cache
         self.db_conn = None
         self.debug = debug
+        self.trading_holidays = []
+        
+        # Set trading holidays if provided
+        if trading_holidays:
+            self.set_trading_holidays(trading_holidays)
+        
         if self.cache:
             self.db_conn = sqlite3.connect(cache_db)
             self._create_cache_table()
@@ -164,7 +190,8 @@ class DataProvider:
 
     def _get_missing_date_ranges(self, df: pd.DataFrame, start_date: str, end_date: str) -> List[tuple]:
         """
-        Identifies missing date ranges in a dataframe.
+        Identifies missing date ranges in a dataframe, considering trading holidays and weekends.
+        Ignores gaps in the middle of existing data to avoid fetching data for temporary data issues.
         """
         start_date_dt = pd.to_datetime(start_date)
         end_date_dt = pd.to_datetime(end_date)
@@ -172,8 +199,22 @@ class DataProvider:
         if df.empty:
             return [(start_date, end_date)]
 
-        # Get business days for the full range
+        # Get business days for the full range (excludes weekends)
         full_range = pd.bdate_range(start=start_date_dt, end=end_date_dt)
+        
+        # Remove trading holidays if they are set
+        if self.trading_holidays:
+            # Convert date objects back to datetime for comparison
+            trading_holidays_dt = [pd.to_datetime(holiday) for holiday in self.trading_holidays]
+            # Only consider holidays that fall on business days (Monday-Friday) and within our range
+            business_day_holidays = []
+            for holiday in trading_holidays_dt:
+                if holiday.weekday() < 5 and start_date_dt <= holiday <= end_date_dt:  # Monday=0, Friday=4
+                    business_day_holidays.append(holiday)
+            
+            # Remove holidays from the full range
+            if business_day_holidays:
+                full_range = full_range.difference(pd.DatetimeIndex(business_day_holidays))
         
         # Find dates that are missing from the dataframe's index
         missing_dates = full_range.difference(df.index)
@@ -181,19 +222,46 @@ class DataProvider:
         if missing_dates.empty:
             return []
 
-        # Group consecutive missing dates into ranges
-        gaps = []
-        if not missing_dates.empty:
-            # Find blocks of consecutive dates
-            breaks = np.where(np.diff(missing_dates.to_julian_date()) > 1)[0] + 1
-            # Split the array of missing dates at these breaks
-            date_blocks = np.split(missing_dates, breaks)
+        # Get the actual data range (first and last dates with data)
+        if not df.empty:
+            data_start = df.index.min()
+            data_end = df.index.max()
             
-            for block in date_blocks:
-                if not block.empty:
-                    gaps.append((block[0].strftime('%Y-%m-%d'), block[-1].strftime('%Y-%m-%d')))
-        
-        return gaps
+            # Only fetch data for ranges that extend beyond existing data
+            # Ignore gaps in the middle of the dataset
+            ranges_to_fetch = []
+            
+            # Check if we need data before the first available data point
+            missing_before = missing_dates[missing_dates < data_start]
+            if not missing_before.empty:
+                ranges_to_fetch.append((missing_before.min().strftime('%Y-%m-%d'), 
+                                      missing_before.max().strftime('%Y-%m-%d')))
+            
+            # Check if we need data after the last available data point
+            missing_after = missing_dates[missing_dates > data_end]
+            if not missing_after.empty:
+                ranges_to_fetch.append((missing_after.min().strftime('%Y-%m-%d'), 
+                                      missing_after.max().strftime('%Y-%m-%d')))
+            
+            if self.debug and len(missing_dates) > len(missing_before) + len(missing_after):
+                gap_count = len(missing_dates) - len(missing_before) - len(missing_after)
+                print(f"Ignoring {gap_count} missing days in the middle of existing data (gaps)")
+            
+            return ranges_to_fetch
+        else:
+            # No existing data, group consecutive missing dates into ranges
+            gaps = []
+            if not missing_dates.empty:
+                # Find blocks of consecutive dates
+                breaks = np.where(np.diff(missing_dates.to_julian_date()) > 1)[0] + 1
+                # Split the array of missing dates at these breaks
+                date_blocks = np.split(missing_dates, breaks)
+                
+                for block in date_blocks:
+                    if not block.empty:
+                        gaps.append((block[0].strftime('%Y-%m-%d'), block[-1].strftime('%Y-%m-%d')))
+            
+            return gaps
 
     def _load_from_cache(self, symbols: List[str], start_date: str, end_date: str) -> pd.DataFrame:
         """Load price data from cache."""
@@ -459,3 +527,37 @@ class DataProvider:
             start_date=start_date,
             end_date=end_date
         )
+    
+    def get_risk_free_rate_metadata(self) -> Dict[str, str]:
+        """
+        Return metadata about the risk-free return instrument.
+        
+        Returns:
+            Dictionary containing metadata about the risk-free rate proxy:
+            - symbol: The ticker symbol
+            - name: Official name of the instrument
+            - description: Detailed description of the instrument and its use
+            - data_source: Source of the data
+            - currency: Currency denomination
+            - frequency: Data frequency
+        """
+        return {
+            'symbol': '^IRX',
+            'name': '13-week (3-month) U.S. Treasury bill yield',
+            'description': (
+                'CBOE 13-Week Treasury Bill Yield Index, which reflects the annualized '
+                'market yield on U.S. three-month Treasury bills and is widely used as a '
+                'proxy for the short-term risk-free rate in financial models. The index '
+                'is officially named "13 WEEK TREASURY BILL (^IRX)" and is provided by '
+                'CBOE Global Indices, tracking the yield on three-month U.S. Treasury bills '
+                'quoted in USD. These bills are sold at a discount to par in weekly auctions '
+                'and their yield represents the smallest return investors accept for virtually '
+                'risk-free, short-term lending to the U.S. government.'
+            ),
+            'data_source': 'CBOE Global Indices via Yahoo Finance',
+            'currency': 'USD',
+            'frequency': 'Daily',
+            'asset_type': 'Treasury Bill Yield',
+            'maturity': '3 months (13 weeks)',
+            'issuer': 'U.S. Treasury Department'
+        }
