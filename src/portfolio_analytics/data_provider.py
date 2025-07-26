@@ -571,12 +571,12 @@ class DataProvider:
     
     def get_cached_etfs(self) -> List[str]:
         """
-        Return list of ETF symbols found in cache.
+        Return list of ETF symbols found in cache using the sector_metadata table.
         
         This method searches for ETF symbols using multiple strategies:
-        1. Sector ETFs from the sector_metadata table (if available)
-        2. Common known ETF symbols
-        3. Symbols with ETF naming patterns
+        1. Sector ETFs from the sector_metadata table (if available) - primary source
+        2. Common known ETF symbols from price_data
+        3. Symbols with ETF naming patterns (fallback)
         
         Returns:
             List of ETF symbols found in the cache database. Returns empty list
@@ -591,46 +591,72 @@ class DataProvider:
             cursor = self.db_conn.cursor()
             etf_symbols = set()
             
-            # First, try to get ETFs from sector_metadata table (if it exists)
-            try:
-                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sector_metadata'")
-                if cursor.fetchone():
+            # Check if sector_metadata table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sector_metadata'")
+            if cursor.fetchone():
+                # Primary source: ETFs from sector_metadata table that have price data
+                try:
                     cursor.execute("""
                         SELECT DISTINCT sm.etf_ticker 
                         FROM sector_metadata sm 
                         INNER JOIN price_data pd ON sm.etf_ticker = pd.Symbol
+                        ORDER BY sm.etf_ticker
                     """)
                     sector_etfs = [row[0] for row in cursor.fetchall()]
                     etf_symbols.update(sector_etfs)
                     if self.debug and sector_etfs:
                         print(f"Found {len(sector_etfs)} sector ETFs from metadata table: {sector_etfs}")
-            except Exception as e:
+                except Exception as e:
+                    if self.debug:
+                        print(f"Could not query sector_metadata table: {e}")
+            else:
                 if self.debug:
-                    print(f"Could not query sector_metadata table: {e}")
+                    print("sector_metadata table not found, using fallback ETF detection")
             
-            # Query to get distinct symbols from cache that appear to be ETFs
-            # ETFs typically have 2-4 character symbols and often contain common ETF patterns
-            query = """
+            # Secondary source: Well-known ETF symbols from price_data
+            known_etfs_query = """
                 SELECT DISTINCT Symbol FROM price_data 
-                WHERE Symbol LIKE '%ETF%' 
-                   OR Symbol IN (
-                       'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'VEA', 'VWO', 'AGG', 'BND',
-                       'SCHB', 'SCHF', 'SCHE', 'SCHV', 'SCHA', 'SCHM', 'SCHG', 'SCHY', 'SCHD',
-                       'IVV', 'IVW', 'IVE', 'IJH', 'IJR', 'IEFA', 'IEMG', 'ITOT', 'IXUS'
-                   )
-                   OR (LENGTH(Symbol) >= 2 AND LENGTH(Symbol) <= 5 
-                       AND Symbol NOT LIKE '^%' 
-                       AND Symbol NOT LIKE '%.%'
-                       AND Symbol NOT LIKE '%-%')
+                WHERE Symbol IN (
+                    'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'VEA', 'VWO', 'AGG', 'BND',
+                    'SCHB', 'SCHF', 'SCHE', 'SCHV', 'SCHA', 'SCHM', 'SCHG', 'SCHY', 'SCHD',
+                    'IVV', 'IVW', 'IVE', 'IJH', 'IJR', 'IEFA', 'IEMG', 'ITOT', 'IXUS',
+                    'EFA', 'EEM', 'GLD', 'SLV', 'TLT', 'IEF', 'LQD', 'HYG', 'VIG', 'VXUS'
+                )
                 ORDER BY Symbol
             """
+            cursor.execute(known_etfs_query)
+            known_etf_results = cursor.fetchall()
+            known_etfs = [row[0] for row in known_etf_results]
+            etf_symbols.update(known_etfs)
             
-            cursor.execute(query)
-            results = cursor.fetchall()
+            if self.debug and known_etfs:
+                print(f"Found {len(known_etfs)} known ETFs in price_data: {known_etfs}")
             
-            # Add symbols from price_data query
-            price_data_etfs = [row[0] for row in results]
-            etf_symbols.update(price_data_etfs)
+            # Tertiary source: Pattern-based ETF detection (if sector_metadata table doesn't exist)
+            if not cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sector_metadata'").fetchone():
+                pattern_query = """
+                    SELECT DISTINCT Symbol FROM price_data 
+                    WHERE Symbol LIKE '%ETF%' 
+                       OR (LENGTH(Symbol) >= 2 AND LENGTH(Symbol) <= 5 
+                           AND Symbol NOT LIKE '^%' 
+                           AND Symbol NOT LIKE '%.%'
+                           AND Symbol NOT LIKE '%-%'
+                           AND Symbol NOT IN (
+                               SELECT DISTINCT cl.Symbol FROM company_list cl
+                               WHERE EXISTS (SELECT 1 FROM sqlite_master WHERE type='table' AND name='company_list')
+                           ))
+                    ORDER BY Symbol
+                """
+                cursor.execute(pattern_query)
+                pattern_results = cursor.fetchall()
+                pattern_etfs = [row[0] for row in pattern_results]
+                # Only add pattern-based ETFs if they're not already known stocks
+                for etf in pattern_etfs:
+                    if etf not in etf_symbols:
+                        etf_symbols.add(etf)
+                
+                if self.debug and pattern_etfs:
+                    print(f"Found {len(pattern_etfs)} potential ETFs using pattern matching")
             
             # Convert set back to sorted list
             final_etf_list = sorted(list(etf_symbols))
@@ -646,14 +672,14 @@ class DataProvider:
     
     def get_cached_stocks(self, include_etfs: bool = True) -> List[str]:
         """
-        Return list of all stock symbols available in cache.
+        Return list of stock symbols available in cache using the company_list table.
         
-        This method returns all symbols found in the price_data table,
-        optionally filtering out ETFs if requested.
+        This method returns stock symbols from the company_list table that also
+        have price data available in the cache, optionally including ETFs.
         
         Args:
             include_etfs: If True, includes ETF symbols in the results.
-                         If False, attempts to filter out ETFs.
+                         If False, returns only stocks from the company_list table.
         
         Returns:
             List of stock symbols found in the cache database. Returns empty list
@@ -667,32 +693,57 @@ class DataProvider:
         try:
             cursor = self.db_conn.cursor()
             
-            if include_etfs:
-                # Get all symbols from cache
+            # Check if company_list table exists
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='company_list'")
+            if not cursor.fetchone():
+                if self.debug:
+                    print("company_list table not found, falling back to price_data table")
+                # Fallback to original logic if company_list table doesn't exist
                 query = """
                     SELECT DISTINCT Symbol FROM price_data 
+                    WHERE Symbol NOT LIKE '^%'
                     ORDER BY Symbol
                 """
                 cursor.execute(query)
                 results = cursor.fetchall()
                 symbols = [row[0] for row in results]
-            else:
-                # Get all symbols but exclude likely ETFs
-                etf_symbols = set(self.get_cached_etfs())
                 
+                if not include_etfs:
+                    etf_symbols = set(self.get_cached_etfs())
+                    symbols = [symbol for symbol in symbols if symbol not in etf_symbols]
+                
+                return symbols
+            
+            if include_etfs:
+                # Get stocks from company_list plus ETFs
+                stock_query = """
+                    SELECT DISTINCT cl.Symbol 
+                    FROM company_list cl
+                    INNER JOIN price_data pd ON cl.Symbol = pd.Symbol
+                    ORDER BY cl.Symbol
+                """
+                cursor.execute(stock_query)
+                stock_results = cursor.fetchall()
+                stock_symbols = [row[0] for row in stock_results]
+                
+                # Add ETFs
+                etf_symbols = self.get_cached_etfs()
+                all_symbols = list(set(stock_symbols + etf_symbols))
+                symbols = sorted(all_symbols)
+            else:
+                # Get only stocks from company_list table that have price data
                 query = """
-                    SELECT DISTINCT Symbol FROM price_data 
-                    ORDER BY Symbol
+                    SELECT DISTINCT cl.Symbol 
+                    FROM company_list cl
+                    INNER JOIN price_data pd ON cl.Symbol = pd.Symbol
+                    ORDER BY cl.Symbol
                 """
                 cursor.execute(query)
                 results = cursor.fetchall()
-                all_symbols = [row[0] for row in results]
-                
-                # Filter out ETFs
-                symbols = [symbol for symbol in all_symbols if symbol not in etf_symbols]
+                symbols = [row[0] for row in results]
             
             if self.debug and symbols:
-                etf_note = " (including ETFs)" if include_etfs else " (excluding ETFs)"
+                etf_note = " (including ETFs)" if include_etfs else " (stocks only from company_list)"
                 print(f"Found {len(symbols)} symbols in cache{etf_note}: {symbols[:10]}{'...' if len(symbols) > 10 else ''}")
             
             return symbols
