@@ -13,6 +13,33 @@ import os
 
 
 class DataProvider:
+    def copy_sample_data(self, target_dir: str) -> None:
+        """
+        Copy sample data files bundled with the package to a specified directory.
+        
+        Args:
+            target_dir: Path to the directory where sample data will be copied.
+        
+        Raises:
+            FileNotFoundError: If the sample data directory does not exist.
+            OSError: If copying files fails.
+        """
+        import shutil
+        sample_data_dir = os.path.join(os.path.dirname(__file__), 'sample_data')
+        if not os.path.isdir(sample_data_dir):
+            raise FileNotFoundError(f"Sample data directory not found: {sample_data_dir}")
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir, exist_ok=True)
+        for filename in os.listdir(sample_data_dir):
+            src_path = os.path.join(sample_data_dir, filename)
+            dst_path = os.path.join(target_dir, filename)
+            if os.path.isfile(src_path):
+                try:
+                    shutil.copy2(src_path, dst_path)
+                    if self.debug:
+                        print(f"Copied {src_path} to {dst_path}")
+                except Exception as e:
+                    raise OSError(f"Failed to copy {src_path} to {dst_path}: {e}")
     """
     A unified interface for fetching financial data from multiple sources.
     

@@ -1,0 +1,2 @@
+# Include sample_data directory and its contents in the package
+recursive-include src/portfolio_analytics/sample_data *
