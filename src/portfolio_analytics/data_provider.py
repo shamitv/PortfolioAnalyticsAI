@@ -561,3 +561,78 @@ class DataProvider:
             'maturity': '3 months (13 weeks)',
             'issuer': 'U.S. Treasury Department'
         }
+    
+    def get_cached_etfs(self) -> List[str]:
+        """
+        Return list of ETF symbols found in cache.
+        
+        This method searches for ETF symbols using multiple strategies:
+        1. Sector ETFs from the sector_metadata table (if available)
+        2. Common known ETF symbols
+        3. Symbols with ETF naming patterns
+        
+        Returns:
+            List of ETF symbols found in the cache database. Returns empty list
+            if no cache is available, no ETFs found, or if any exceptions occur.
+        """
+        if not self.cache or not self.db_conn:
+            if self.debug:
+                print("Cache not enabled or database connection not available")
+            return []
+        
+        try:
+            cursor = self.db_conn.cursor()
+            etf_symbols = set()
+            
+            # First, try to get ETFs from sector_metadata table (if it exists)
+            try:
+                cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sector_metadata'")
+                if cursor.fetchone():
+                    cursor.execute("""
+                        SELECT DISTINCT sm.etf_ticker 
+                        FROM sector_metadata sm 
+                        INNER JOIN price_data pd ON sm.etf_ticker = pd.Symbol
+                    """)
+                    sector_etfs = [row[0] for row in cursor.fetchall()]
+                    etf_symbols.update(sector_etfs)
+                    if self.debug and sector_etfs:
+                        print(f"Found {len(sector_etfs)} sector ETFs from metadata table: {sector_etfs}")
+            except Exception as e:
+                if self.debug:
+                    print(f"Could not query sector_metadata table: {e}")
+            
+            # Query to get distinct symbols from cache that appear to be ETFs
+            # ETFs typically have 2-4 character symbols and often contain common ETF patterns
+            query = """
+                SELECT DISTINCT Symbol FROM price_data 
+                WHERE Symbol LIKE '%ETF%' 
+                   OR Symbol IN (
+                       'SPY', 'QQQ', 'IWM', 'DIA', 'VTI', 'VOO', 'VEA', 'VWO', 'AGG', 'BND',
+                       'SCHB', 'SCHF', 'SCHE', 'SCHV', 'SCHA', 'SCHM', 'SCHG', 'SCHY', 'SCHD',
+                       'IVV', 'IVW', 'IVE', 'IJH', 'IJR', 'IEFA', 'IEMG', 'ITOT', 'IXUS'
+                   )
+                   OR (LENGTH(Symbol) >= 2 AND LENGTH(Symbol) <= 5 
+                       AND Symbol NOT LIKE '^%' 
+                       AND Symbol NOT LIKE '%.%'
+                       AND Symbol NOT LIKE '%-%')
+                ORDER BY Symbol
+            """
+            
+            cursor.execute(query)
+            results = cursor.fetchall()
+            
+            # Add symbols from price_data query
+            price_data_etfs = [row[0] for row in results]
+            etf_symbols.update(price_data_etfs)
+            
+            # Convert set back to sorted list
+            final_etf_list = sorted(list(etf_symbols))
+            
+            if self.debug and final_etf_list:
+                print(f"Found {len(final_etf_list)} total ETF symbols in cache: {final_etf_list[:10]}{'...' if len(final_etf_list) > 10 else ''}")
+            
+            return final_etf_list
+            
+        except Exception as e:
+            print(f"Error retrieving ETF symbols from cache: {e}")
+            return []
