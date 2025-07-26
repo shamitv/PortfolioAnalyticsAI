@@ -856,3 +856,232 @@ class Analyzer:
             'number_of_assets': self.metrics['portfolio'].get('number_of_assets', 0),
             'concentration': self.metrics['portfolio'].get('portfolio_concentration', 0)
         }
+    
+    def generate_openai_messages(self, 
+                               benchmark_returns: Optional[pd.Series] = None,
+                               risk_free_rate: float = 0.02,
+                               analysis_request: str = "Analyze this portfolio and provide investment insights",
+                               include_visualizations: bool = True,
+                               output_format: str = "comprehensive") -> List[Dict[str, Any]]:
+        """
+        Generate OpenAI-compatible messages for LLM analysis.
+        
+        Args:
+            benchmark_returns: Benchmark returns for comparison
+            risk_free_rate: Risk-free rate for calculations
+            analysis_request: The analysis request/prompt for the LLM
+            include_visualizations: Whether to include base64 images for vision models
+            output_format: Export format ('comprehensive', 'summary', 'metrics_only', 'visuals_only')
+            
+        Returns:
+            List of message dictionaries compatible with OpenAI API
+        """
+        # Generate the complete analysis
+        analysis_data = self.export_for_llm(benchmark_returns, risk_free_rate, output_format)
+        
+        messages = []
+        
+        # System message with context about the analysis
+        system_message = {
+            "role": "system",
+            "content": self._generate_system_prompt()
+        }
+        messages.append(system_message)
+        
+        # User message with the analysis request and data
+        user_content = []
+        
+        # Add the text analysis request
+        user_content.append({
+            "type": "text",
+            "text": f"{analysis_request}\n\n{self._format_analysis_for_llm(analysis_data, include_visualizations)}"
+        })
+        
+        # Add visualizations as images if requested and available
+        if include_visualizations and 'visualizations' in analysis_data:
+            for viz_name, base64_image in analysis_data['visualizations'].items():
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/png;base64,{base64_image}",
+                        "detail": "high"
+                    }
+                })
+        
+        user_message = {
+            "role": "user",
+            "content": user_content
+        }
+        messages.append(user_message)
+        
+        return messages
+    
+    def _generate_system_prompt(self) -> str:
+        """Generate system prompt for the LLM."""
+        return """You are an expert portfolio analyst and investment advisor with deep knowledge of:
+
+- Modern Portfolio Theory and asset allocation
+- Risk management and Value at Risk (VaR) analysis  
+- Portfolio optimization techniques
+- Financial metrics and performance analysis
+- Technical and fundamental analysis
+- Market dynamics and economic factors
+
+You will receive comprehensive portfolio analysis data including:
+- Performance metrics (returns, Sharpe ratio, volatility, etc.)
+- Risk metrics (VaR, Expected Shortfall, maximum drawdown, etc.)
+- Portfolio Greeks (Delta, Gamma, Theta, Vega, Rho)
+- Asset allocation and concentration analysis
+- Time-based performance analysis
+- Stress testing and scenario analysis
+- Multiple visualization charts
+
+Your task is to:
+1. Analyze the quantitative data thoroughly
+2. Interpret the visual charts and patterns
+3. Identify strengths and weaknesses in the portfolio
+4. Provide actionable investment recommendations
+5. Suggest optimization opportunities
+6. Highlight potential risks and mitigation strategies
+
+Provide clear, professional analysis with specific recommendations backed by the data."""
+    
+    def _format_analysis_for_llm(self, analysis_data: Dict[str, Any], include_visualizations: bool = True) -> str:
+        """Format analysis data into text for LLM consumption."""
+        
+        formatted_text = []
+        
+        # Portfolio Summary
+        if 'portfolio_summary' in analysis_data:
+            summary = analysis_data['portfolio_summary']
+            formatted_text.append("=== PORTFOLIO SUMMARY ===")
+            formatted_text.append(f"Portfolio Name: {summary.get('portfolio_name', 'N/A')}")
+            formatted_text.append(f"Assets: {', '.join(summary.get('assets', []))}")
+            formatted_text.append(f"Analysis Period: {summary.get('data_start_date', 'N/A')} to {summary.get('data_end_date', 'N/A')}")
+            formatted_text.append(f"Total Observations: {summary.get('total_observations', 0):,} trading days")
+            formatted_text.append("")
+        
+        # Key Metrics
+        if 'metrics' in analysis_data:
+            formatted_text.append("=== PERFORMANCE METRICS ===")
+            
+            # Performance metrics
+            if 'performance' in analysis_data['metrics']:
+                perf = analysis_data['metrics']['performance']
+                formatted_text.append(f"Total Return: {perf.get('total_return', 0):.2%}")
+                formatted_text.append(f"Annual Return: {perf.get('annual_return', 0):.2%}")
+                formatted_text.append(f"Annual Volatility: {perf.get('annual_volatility', 0):.2%}")
+                formatted_text.append(f"Sharpe Ratio: {perf.get('sharpe_ratio', 0):.3f}")
+                formatted_text.append(f"Sortino Ratio: {perf.get('sortino_ratio', 0):.3f}")
+                formatted_text.append(f"Maximum Drawdown: {perf.get('max_drawdown', 0):.2%}")
+                formatted_text.append("")
+            
+            # Risk metrics
+            if 'risk' in analysis_data['metrics']:
+                risk = analysis_data['metrics']['risk']
+                formatted_text.append("=== RISK METRICS ===")
+                formatted_text.append(f"VaR (95%): {risk.get('var_95', 0):.2%}")
+                formatted_text.append(f"Expected Shortfall (95%): {risk.get('expected_shortfall_95', 0):.2%}")
+                formatted_text.append(f"Skewness: {risk.get('skewness', 0):.3f}")
+                formatted_text.append(f"Kurtosis: {risk.get('kurtosis', 0):.3f}")
+                formatted_text.append("")
+            
+            # Portfolio composition
+            if 'allocation' in analysis_data['metrics']:
+                alloc = analysis_data['metrics']['allocation']
+                formatted_text.append("=== PORTFOLIO COMPOSITION ===")
+                if 'weights' in alloc:
+                    for asset, weight in alloc['weights'].items():
+                        formatted_text.append(f"{asset}: {weight:.1%}")
+                formatted_text.append(f"Concentration (HHI): {alloc.get('weight_concentration_hhi', 0):.3f}")
+                formatted_text.append(f"Largest Position: {alloc.get('largest_position', 0):.1%}")
+                formatted_text.append("")
+        
+        # Portfolio Greeks
+        if 'greeks' in analysis_data and 'portfolio_greeks' in analysis_data['greeks']:
+            greeks = analysis_data['greeks']['portfolio_greeks']
+            formatted_text.append("=== PORTFOLIO GREEKS ===")
+            formatted_text.append(f"Delta (Market Sensitivity): {greeks.get('portfolio_delta', 0):.3f}")
+            formatted_text.append(f"Gamma (Convexity): {greeks.get('portfolio_gamma', 0):.3f}")
+            formatted_text.append(f"Theta (Time Decay): {greeks.get('portfolio_theta', 0):.3f}")
+            formatted_text.append(f"Vega (Volatility Sensitivity): {greeks.get('portfolio_vega', 0):.3f}")
+            formatted_text.append(f"Rho (Interest Rate Sensitivity): {greeks.get('portfolio_rho', 0):.3f}")
+            formatted_text.append("")
+        
+        # Asset-level analysis
+        if 'greeks' in analysis_data and 'asset_greeks' in analysis_data['greeks']:
+            asset_greeks = analysis_data['greeks']['asset_greeks']
+            formatted_text.append("=== ASSET-LEVEL ANALYSIS ===")
+            formatted_text.append("Asset | Weight | Beta | Alpha | Volatility | Risk Contribution")
+            formatted_text.append("-" * 65)
+            for asset, data in asset_greeks.items():
+                formatted_text.append(
+                    f"{asset:5} | {data.get('weight', 0):5.1%} | "
+                    f"{data.get('beta', 0):4.2f} | {data.get('alpha', 0):5.2f} | "
+                    f"{data.get('volatility', 0):9.1%} | {data.get('contribution_to_risk', 0):15.4f}"
+                )
+            formatted_text.append("")
+        
+        # Stress testing results
+        if 'greeks' in analysis_data and 'sensitivity_analysis' in analysis_data['greeks']:
+            sensitivity = analysis_data['greeks']['sensitivity_analysis']
+            if 'stress_scenarios' in sensitivity:
+                scenarios = sensitivity['stress_scenarios']
+                formatted_text.append("=== STRESS TEST SCENARIOS ===")
+                
+                if 'market_crash_10pct' in scenarios:
+                    crash_10 = scenarios['market_crash_10pct']
+                    formatted_text.append(f"Market Crash -10%:")
+                    formatted_text.append(f"  Scenario Return: {crash_10.get('scenario_return', 0):.2%}")
+                    formatted_text.append(f"  Scenario Volatility: {crash_10.get('scenario_volatility', 0):.2%}")
+                
+                if 'volatility_spike_50pct' in scenarios:
+                    vol_spike = scenarios['volatility_spike_50pct']
+                    formatted_text.append(f"Volatility Spike +50%:")
+                    formatted_text.append(f"  Base Volatility: {vol_spike.get('base_volatility', 0):.2%}")
+                    formatted_text.append(f"  Stressed Volatility: {vol_spike.get('stressed_volatility', 0):.2%}")
+                formatted_text.append("")
+        
+        # Visualization summary
+        if include_visualizations and 'visualizations' in analysis_data:
+            viz_count = len(analysis_data['visualizations'])
+            formatted_text.append(f"=== VISUALIZATIONS INCLUDED ===")
+            formatted_text.append(f"Total Charts: {viz_count}")
+            formatted_text.append("Available Charts:")
+            for viz_name in analysis_data['visualizations'].keys():
+                formatted_text.append(f"  • {viz_name.replace('_', ' ').title()}")
+            formatted_text.append("")
+            formatted_text.append("Note: All charts are provided as high-resolution images for visual analysis.")
+        
+        return "\n".join(formatted_text)
+    
+    def generate_simple_message(self, 
+                              analysis_request: str = "Analyze this portfolio and provide investment insights",
+                              benchmark_returns: Optional[pd.Series] = None,
+                              risk_free_rate: float = 0.02) -> List[Dict[str, str]]:
+        """
+        Generate simple text-only messages for non-vision LLM models.
+        
+        Args:
+            analysis_request: The analysis request/prompt for the LLM
+            benchmark_returns: Benchmark returns for comparison
+            risk_free_rate: Risk-free rate for calculations
+            
+        Returns:
+            List of simple message dictionaries (text only)
+        """
+        # Generate analysis without visualizations
+        analysis_data = self.export_for_llm(benchmark_returns, risk_free_rate, "metrics_only")
+        
+        messages = [
+            {
+                "role": "system", 
+                "content": self._generate_system_prompt()
+            },
+            {
+                "role": "user",
+                "content": f"{analysis_request}\n\n{self._format_analysis_for_llm(analysis_data, include_visualizations=False)}"
+            }
+        ]
+        
+        return messages
