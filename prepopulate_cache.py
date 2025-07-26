@@ -19,9 +19,11 @@ def create_company_list_table(conn):
     ''')
     conn.commit()
 
-def populate_company_list(conn, csv_path):
-    """Populate the company_list table from a CSV file."""
-    df = pd.read_csv(csv_path)
+def populate_company_list(conn, excel_path):
+    """Populate the company_list table from an Excel file."""
+    df = pd.read_excel(excel_path, sheet_name='basics')
+    # Ensure columns are named correctly for the database table
+    df = df[['Symbol', 'Name', 'Sector']]
     df.to_sql('company_list', conn, if_exists='replace', index=False)
     print(f"Populated company list with {len(df)} companies.")
 
@@ -32,7 +34,7 @@ def prepopulate_market_data_cache():
     """
     sample_data_dir = 'sample_data'
     db_path = os.path.join(sample_data_dir, 'market_data.db')
-    csv_path = os.path.join(sample_data_dir, 'snp_500_companies.csv')
+    excel_path = os.path.join(sample_data_dir, 'snp_500_companies.xlsx')
 
     # Ensure the sample_data directory exists
     os.makedirs(sample_data_dir, exist_ok=True)
@@ -40,7 +42,7 @@ def prepopulate_market_data_cache():
     # Connect to the database and create the company list table
     conn = sqlite3.connect(db_path)
     create_company_list_table(conn)
-    populate_company_list(conn, csv_path)
+    populate_company_list(conn, excel_path)
     conn.close()
 
     # Initialize DataProvider with caching enabled and debug output on
