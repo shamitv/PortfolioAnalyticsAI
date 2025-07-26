@@ -19,6 +19,7 @@ from .portfolio import Portfolio
 from .performance import PerformanceAnalyzer
 from .risk_models import RiskModel
 from .visualization import PortfolioVisualizer
+from .optimization import PortfolioOptimizer
 
 
 class Analyzer:
@@ -42,6 +43,7 @@ class Analyzer:
         self.performance_analyzer = PerformanceAnalyzer()
         self.risk_model = RiskModel()
         self.visualizer = PortfolioVisualizer()
+        self.optimizer = PortfolioOptimizer()
         
         # Storage for generated content
         self.metrics = {}
@@ -188,6 +190,7 @@ class Analyzer:
             'cumulative_returns': self._create_cumulative_returns_chart(portfolio_returns, benchmark_returns),
             'drawdown_analysis': self._create_drawdown_chart(portfolio_returns),
             'risk_return_scatter': self._create_risk_return_scatter(),
+            'efficient_frontier': self._create_efficient_frontier_chart(),
             'rolling_metrics': self._create_rolling_metrics_chart(portfolio_returns),
             'performance_heatmap': self._create_performance_heatmap(),
             'greek_sensitivity': self._create_greek_sensitivity_chart()
@@ -523,6 +526,53 @@ class Analyzer:
         ax.set_ylabel('Expected Return')
         ax.grid(True, alpha=0.3)
         
+        plt.tight_layout()
+        return self._fig_to_base64(fig)
+    
+    def _create_efficient_frontier_chart(self) -> str:
+        """Create efficient frontier chart."""
+        fig, ax = plt.subplots(figsize=(12, 7))
+
+        # Calculate efficient frontier
+        try:
+            frontier_returns, frontier_volatilities, _ = self.optimizer.calculate_efficient_frontier(
+                self.portfolio.returns
+            )
+            ax.plot(frontier_volatilities, frontier_returns, 'g--', label='Efficient Frontier')
+        except Exception as e:
+            print(f"Could not calculate efficient frontier: {e}")
+
+        # Plot individual assets
+        asset_returns = self.portfolio.returns.mean() * 252
+        asset_volatilities = self.portfolio.returns.std() * np.sqrt(252)
+        sharpe_ratios = asset_returns / asset_volatilities
+        
+        scatter = ax.scatter(asset_volatilities, asset_returns, 
+                   marker='o', s=100, 
+                   c=sharpe_ratios,
+                   cmap='viridis',
+                   label='Individual Assets')
+        
+        cbar = plt.colorbar(scatter)
+        cbar.set_label('Sharpe Ratio')
+
+        for i, symbol in enumerate(self.portfolio.symbols):
+            ax.annotate(symbol, (asset_volatilities[i], asset_returns[i]), xytext=(5, -5), textcoords='offset points')
+
+        # Plot current portfolio
+        portfolio_return = (self.portfolio.returns * self.portfolio.weights).sum(axis=1).mean() * 252
+        portfolio_volatility = (self.portfolio.returns * self.portfolio.weights).sum(axis=1).std() * np.sqrt(252)
+        ax.scatter(portfolio_volatility, portfolio_return, marker='*', color='red', s=200, label='Current Portfolio')
+        ax.annotate('Current', (portfolio_volatility, portfolio_return), xytext=(5, -5), textcoords='offset points')
+
+        ax.set_title('Efficient Frontier and Portfolio Positioning', fontsize=16, fontweight='bold')
+        ax.set_xlabel('Volatility (Annualized)')
+        ax.set_ylabel('Return (Annualized)')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: '{:.0%}'.format(y)))
+        ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: '{:.0%}'.format(x)))
+
         plt.tight_layout()
         return self._fig_to_base64(fig)
     
