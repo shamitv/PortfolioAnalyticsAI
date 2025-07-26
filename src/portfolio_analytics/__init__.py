@@ -15,6 +15,7 @@ from .optimization import PortfolioOptimizer
 from .risk_models import RiskModel, VaRCalculator
 from .performance import PerformanceAnalyzer
 from .visualization import PortfolioVisualizer
+from .analyzer import Analyzer
 
 __all__ = [
     "Portfolio",
@@ -24,4 +25,5 @@ __all__ = [
     "VaRCalculator",
     "PerformanceAnalyzer",
     "PortfolioVisualizer",
+    "Analyzer",
 ]
