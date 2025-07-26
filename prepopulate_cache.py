@@ -6,6 +6,8 @@ from portfolio_analytics.data_provider import DataProvider
 from datetime import datetime, timedelta
 import os
 import sqlite3
+import pandas_market_calendars as mcal
+
 
 def create_company_list_table(conn):
     """Create the company_list table if it doesn't exist."""
@@ -33,6 +35,29 @@ def create_sector_metadata_table(conn):
         )
     ''')
     conn.commit()
+
+
+
+def get_us_trading_holidays():
+    """
+    Returns a list of US trading holidays from 2000 to current year.
+    """    
+    # Initialize NYSE calendar
+    nyse = mcal.get_calendar('NYSE')
+    
+    # Get holidays from 2000 to current year
+    current_year = datetime.now().year
+    start_year = 2000
+    
+    # Get holidays for the date range
+    start_date = f'{start_year}-01-01'
+    end_date = f'{current_year}-12-31'
+    holidays = nyse.holidays(start_date=start_date, end_date=end_date)
+    
+    # Return list of holiday dates from 2000 to current year
+    return holidays.to_list()
+
+
 
 def populate_sector_metadata(conn, sector_etfs_path):
     """Populate the sector_metadata table from the Sector_ETFs.csv file."""

@@ -13,6 +13,19 @@ import os
 
 
 class DataProvider:
+
+
+
+    def set_trading_holidays(self, holidays: List[str]) -> None:
+        """
+        Set the list of trading holidays.
+        
+        Args:
+            holidays: List of holiday dates in 'YYYY-MM-DD' format.
+        """
+        self.trading_holidays = pd.to_datetime(holidays).date if holidays else []
+
+
     def copy_sample_data(self, target_dir: str) -> None:
         """
         Copy sample data files bundled with the package to a specified directory.
@@ -46,7 +59,7 @@ class DataProvider:
     Currently supports Yahoo Finance with plans to add other data sources.
     """
     
-    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False):
+    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db', debug: bool = False, trading_holidays: Optional[List[str]] = None):
         """
         Initialize data provider.
         
@@ -55,12 +68,19 @@ class DataProvider:
             cache: If True, cache data to a local SQLite database.
             cache_db: Path to the SQLite database file.
             debug: If True, print debug/troubleshooting messages.
+            trading_holidays: List of trading holiday dates in 'YYYY-MM-DD' format.
         """
         self.source = source
         self._validate_source()
         self.cache = cache
         self.db_conn = None
         self.debug = debug
+        self.trading_holidays = []
+        
+        # Set trading holidays if provided
+        if trading_holidays:
+            self.set_trading_holidays(trading_holidays)
+        
         if self.cache:
             self.db_conn = sqlite3.connect(cache_db)
             self._create_cache_table()
