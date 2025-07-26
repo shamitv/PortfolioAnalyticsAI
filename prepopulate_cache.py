@@ -165,10 +165,12 @@ def prepopulate_market_data_cache():
     risk_free_metadata = data_provider.get_risk_free_rate_metadata()
     risk_free_symbol = [risk_free_metadata['symbol']]
     print(f"Adding risk-free rate symbol: {risk_free_metadata['symbol']} ({risk_free_metadata['name']})")
+    print(f"Risk-free rate description: {risk_free_metadata['description'][:100]}...")
 
     # Combine S&P 500 symbols, sector ETF symbols, and risk-free rate symbol
     all_symbols = symbols + sector_etf_symbols + risk_free_symbol
     print(f"Total symbols to fetch: {len(all_symbols)} ({len(symbols)} S&P 500 + {len(sector_etf_symbols)} sector ETFs + 1 risk-free rate)")
+    print(f"Risk-free rate symbol to be downloaded: {risk_free_symbol[0]}")
 
     # Define date range
     end_date = datetime.now() - timedelta(days=1)
@@ -180,6 +182,7 @@ def prepopulate_market_data_cache():
     delisted_count = 0
     error_count = 0
     success_count = 0
+    risk_free_downloaded = False
     
     for i, symbol in enumerate(all_symbols):
         if symbol in sector_etf_symbols:
@@ -197,6 +200,9 @@ def prepopulate_market_data_cache():
                 end_date=end_date.strftime('%Y-%m-%d')
             )
             success_count += 1
+            if symbol in risk_free_symbol:
+                risk_free_downloaded = True
+                print(f"✓ Successfully downloaded risk-free rate data for {symbol}")
         except Exception as e:
             error_msg = str(e)
             if "possibly delisted" in error_msg or "no price data found" in error_msg:
@@ -205,9 +211,15 @@ def prepopulate_market_data_cache():
             else:
                 print(f"ERROR: {symbol} - {error_msg}")
                 error_count += 1
+                if symbol in risk_free_symbol:
+                    print(f"✗ Failed to download risk-free rate data for {symbol}")
 
     print("\nCache pre-population complete.")
     print(f"Summary: {success_count} successful, {delisted_count} delisted/no data, {error_count} other errors")
+    if risk_free_downloaded:
+        print("✓ Risk-free rate data successfully downloaded")
+    else:
+        print("✗ Risk-free rate data download failed")
 
     # Print the size of the database file
     db_size = os.path.getsize(db_path)
