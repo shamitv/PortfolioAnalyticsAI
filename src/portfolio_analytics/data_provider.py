@@ -643,3 +643,116 @@ class DataProvider:
         except Exception as e:
             print(f"Error retrieving ETF symbols from cache: {e}")
             return []
+    
+    def get_cached_stocks(self, include_etfs: bool = True) -> List[str]:
+        """
+        Return list of all stock symbols available in cache.
+        
+        This method returns all symbols found in the price_data table,
+        optionally filtering out ETFs if requested.
+        
+        Args:
+            include_etfs: If True, includes ETF symbols in the results.
+                         If False, attempts to filter out ETFs.
+        
+        Returns:
+            List of stock symbols found in the cache database. Returns empty list
+            if no cache is available, no symbols found, or if any exceptions occur.
+        """
+        if not self.cache or not self.db_conn:
+            if self.debug:
+                print("Cache not enabled or database connection not available")
+            return []
+        
+        try:
+            cursor = self.db_conn.cursor()
+            
+            if include_etfs:
+                # Get all symbols from cache
+                query = """
+                    SELECT DISTINCT Symbol FROM price_data 
+                    ORDER BY Symbol
+                """
+                cursor.execute(query)
+                results = cursor.fetchall()
+                symbols = [row[0] for row in results]
+            else:
+                # Get all symbols but exclude likely ETFs
+                etf_symbols = set(self.get_cached_etfs())
+                
+                query = """
+                    SELECT DISTINCT Symbol FROM price_data 
+                    ORDER BY Symbol
+                """
+                cursor.execute(query)
+                results = cursor.fetchall()
+                all_symbols = [row[0] for row in results]
+                
+                # Filter out ETFs
+                symbols = [symbol for symbol in all_symbols if symbol not in etf_symbols]
+            
+            if self.debug and symbols:
+                etf_note = " (including ETFs)" if include_etfs else " (excluding ETFs)"
+                print(f"Found {len(symbols)} symbols in cache{etf_note}: {symbols[:10]}{'...' if len(symbols) > 10 else ''}")
+            
+            return symbols
+            
+        except Exception as e:
+            print(f"Error retrieving symbols from cache: {e}")
+            return []
+    
+    def get_cached_symbols_info(self) -> Dict[str, Dict[str, Union[str, int]]]:
+        """
+        Return detailed information about all symbols available in cache.
+        
+        Returns:
+            Dictionary with symbol as key and info dict as value containing:
+            - 'count': Number of data points available
+            - 'start_date': Earliest date available
+            - 'end_date': Latest date available
+            - 'symbol_type': 'ETF' or 'Stock' (best guess)
+        """
+        if not self.cache or not self.db_conn:
+            if self.debug:
+                print("Cache not enabled or database connection not available")
+            return {}
+        
+        try:
+            cursor = self.db_conn.cursor()
+            
+            # Get detailed info for each symbol
+            query = """
+                SELECT Symbol, 
+                       COUNT(*) as count,
+                       MIN(Date) as start_date,
+                       MAX(Date) as end_date
+                FROM price_data 
+                GROUP BY Symbol
+                ORDER BY Symbol
+            """
+            cursor.execute(query)
+            results = cursor.fetchall()
+            
+            # Get ETF symbols for classification
+            etf_symbols = set(self.get_cached_etfs())
+            
+            symbols_info = {}
+            for row in results:
+                symbol, count, start_date, end_date = row
+                symbol_type = 'ETF' if symbol in etf_symbols else 'Stock'
+                
+                symbols_info[symbol] = {
+                    'count': count,
+                    'start_date': start_date,
+                    'end_date': end_date,
+                    'symbol_type': symbol_type
+                }
+            
+            if self.debug and symbols_info:
+                print(f"Retrieved info for {len(symbols_info)} symbols from cache")
+            
+            return symbols_info
+            
+        except Exception as e:
+            print(f"Error retrieving symbol information from cache: {e}")
+            return {}
