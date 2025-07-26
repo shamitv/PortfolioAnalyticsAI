@@ -8,6 +8,8 @@ import yfinance as yf
 import requests
 from typing import List, Optional, Dict, Union
 from datetime import datetime, timedelta
+import sqlite3
+import os
 
 
 class DataProvider:
@@ -17,15 +19,40 @@ class DataProvider:
     Currently supports Yahoo Finance with plans to add other data sources.
     """
     
-    def __init__(self, source: str = "yahoo"):
+    def __init__(self, source: str = "yahoo", cache: bool = False, cache_db: str = 'portfolio_cache.db'):
         """
         Initialize data provider.
         
         Args:
             source: Data source ('yahoo', 'alpha_vantage', 'quandl')
+            cache: If True, cache data to a local SQLite database.
+            cache_db: Path to the SQLite database file.
         """
         self.source = source
         self._validate_source()
+        self.cache = cache
+        self.db_conn = None
+        if self.cache:
+            self.db_conn = sqlite3.connect(cache_db)
+            self._create_cache_table()
+
+    def __del__(self):
+        if self.db_conn:
+            self.db_conn.close()
+
+    def _create_cache_table(self):
+        """Create the cache table if it doesn't exist."""
+        if self.db_conn:
+            cursor = self.db_conn.cursor()
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS price_data (
+                    Date TEXT,
+                    Symbol TEXT,
+                    Close REAL,
+                    PRIMARY KEY (Date, Symbol)
+                )
+            ''')
+            self.db_conn.commit()
     
     def _validate_source(self) -> None:
         """Validate the data source."""
@@ -56,11 +83,75 @@ class DataProvider:
         
         if end_date is None:
             end_date = datetime.now().strftime("%Y-%m-%d")
+
+        if self.cache:
+            try:
+                cached_data = self._load_from_cache(symbols, start_date, end_date)
+                if not cached_data.empty:
+                    # Check if all symbols are present and data covers the full range
+                    if all(s in cached_data.columns for s in symbols):
+                         if cached_data.index.min().strftime('%Y-%m-%d') <= start_date and cached_data.index.max().strftime('%Y-%m-%d') >= end_date:
+                            return cached_data[symbols]
+
+            except Exception as e:
+                print(f"Cache read failed: {e}")
+
         
         if self.source == "yahoo":
-            return self._fetch_yahoo_data(symbols, start_date, end_date, interval)
+            data = self._fetch_yahoo_data(symbols, start_date, end_date, interval)
+            if self.cache:
+                self._save_to_cache(data)
+            return data
         else:
             raise NotImplementedError(f"Data fetching for {self.source} not yet implemented")
+
+    def _load_from_cache(self, symbols: List[str], start_date: str, end_date: str) -> pd.DataFrame:
+        """Load price data from cache."""
+        if not self.db_conn:
+            return pd.DataFrame()
+
+        query = f"""
+            SELECT Date, Symbol, Close FROM price_data
+            WHERE Symbol IN ({','.join(['?']*len(symbols))})
+            AND Date >= ? AND Date <= ?
+        """
+        params = symbols + [start_date, end_date]
+        df = pd.read_sql_query(query, self.db_conn, params=params)
+        
+        if df.empty:
+            return pd.DataFrame()
+
+        df['Date'] = pd.to_datetime(df['Date'])
+        pivot_df = df.pivot(index='Date', columns='Symbol', values='Close')
+        return pivot_df
+
+    def _save_to_cache(self, data: pd.DataFrame):
+        """Save price data to cache."""
+        if not self.db_conn or data.empty:
+            return
+
+        df_to_save = data.stack().reset_index()
+        df_to_save.columns = ['Date', 'Symbol', 'Close']
+        df_to_save['Date'] = df_to_save['Date'].dt.strftime('%Y-%m-%d')
+
+        try:
+            df_to_save.to_sql('price_data', self.db_conn, if_exists='append', index=False, method=self._upsert_sqlite)
+        except Exception as e:
+            print(f"Failed to cache data: {e}")
+
+    def _upsert_sqlite(self, table, conn, keys, data_iter):
+        from sqlalchemy.dialects.sqlite import insert
+        from sqlalchemy import table as sql_table, column
+        
+        sql_table_obj = sql_table(table.name, column('Date'), column('Symbol'), column('Close'))
+        
+        for data in data_iter:
+            stmt = insert(sql_table_obj).values(data)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=['Date', 'Symbol'],
+                set_={'Close': stmt.excluded.Close}
+            )
+            conn.execute(stmt)
     
     def _fetch_yahoo_data(self, 
                          symbols: List[str],
