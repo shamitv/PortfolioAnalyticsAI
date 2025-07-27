@@ -5,6 +5,20 @@
 ![License](https://img.shields.io/pypi/l/portfolio-analytics-ai)
 ![Downloads](https://img.shields.io/pypi/dm/portfolio-analytics-ai)
 
+## ⚠️ Project Status
+
+**This project is currently a Proof of Concept (POC) and is in very early stages of development.**
+
+**Important Disclaimers:**
+- 🚧 **Early Development**: This is a POC implementation and should be considered experimental
+- 📊 **Unvalidated**: The algorithms and calculations have not been validated with real-world financial data
+- 👨‍💼 **No Professional Review**: The financial models and risk calculations have not been reviewed by finance professionals
+- 🚫 **Not Production Ready**: This package is **NOT ready for production use** or real investment decisions
+
+**Use at your own risk. This software is intended for educational and research purposes only.**
+
+---
+
 A comprehensive Python package for AI-powered portfolio analytics, optimization, and risk management. Built on modern portfolio theory and advanced statistical methods, this package provides professional-grade tools for investment analysis, portfolio construction, and risk assessment.
 
 ## 🌍 Where It Can Be Used
