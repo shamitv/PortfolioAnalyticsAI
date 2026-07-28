@@ -83,7 +83,6 @@ PortfolioAnalyticsAI/
 │   └── 04_random_portfolio_analysis.ipynb # Advanced analysis examples
 ├── tests/                            # Unit tests and integration tests
 ├── sample_data/                      # External sample data files
-├── requirements.txt                  # Package dependencies
 ├── pyproject.toml                    # Package configuration
 └── README.md                         # Project documentation
 ```

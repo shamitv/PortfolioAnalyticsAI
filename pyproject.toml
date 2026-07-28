@@ -29,10 +29,14 @@ dependencies = [
     "matplotlib>=3.4.0",
     "seaborn>=0.11.0",
     "scikit-learn>=1.0.0",
+    "scipy>=1.7.0",
     "yfinance>=0.1.87",
     "plotly>=5.0.0",
-    "jupyter>=1.0.0",
     "requests>=2.25.0",
+    "sqlalchemy>=1.4.0",
+    "openpyxl>=3.0.0",
+    "pandas_market_calendars>=5.0.0",
+    "openai",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +47,9 @@ dev = [
     "flake8>=3.9",
     "mypy>=0.910",
     "pre-commit>=2.15.0",
+    "jupyter>=1.0.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
 ]
 
 [project.urls]
