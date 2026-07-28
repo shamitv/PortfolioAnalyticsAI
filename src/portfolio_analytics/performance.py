@@ -61,8 +61,8 @@ class PerformanceAnalyzer:
         annual_return = returns.mean() * 252
         
         # Calculate monthly and quarterly returns
-        monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
-        quarterly_returns = returns.resample('Q').apply(lambda x: (1 + x).prod() - 1)
+        monthly_returns = returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
+        quarterly_returns = returns.resample('QE').apply(lambda x: (1 + x).prod() - 1)
         
         return {
             'total_return': total_return,
