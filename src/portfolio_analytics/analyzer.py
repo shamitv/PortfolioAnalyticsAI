@@ -280,13 +280,13 @@ class Analyzer:
             return {}
         
         # Monthly analysis
-        monthly_returns = returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
+        monthly_returns = returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
         
         # Quarterly analysis
-        quarterly_returns = returns.resample('Q').apply(lambda x: (1 + x).prod() - 1)
+        quarterly_returns = returns.resample('QE').apply(lambda x: (1 + x).prod() - 1)
         
         # Yearly analysis
-        yearly_returns = returns.resample('Y').apply(lambda x: (1 + x).prod() - 1)
+        yearly_returns = returns.resample('YE').apply(lambda x: (1 + x).prod() - 1)
         
         return {
             'monthly_stats': {
@@ -588,7 +588,7 @@ class Analyzer:
                            cmap='viridis')
         
         for i, symbol in enumerate(self.portfolio.symbols):
-            ax.annotate(symbol, (asset_volatilities[i], asset_returns[i]))
+            ax.annotate(symbol, (asset_volatilities.iloc[i], asset_returns.iloc[i]))
         
         ax.set_title('Risk-Return Profile by Asset', fontsize=16, fontweight='bold')
         ax.set_xlabel('Volatility (Risk)')
@@ -626,7 +626,7 @@ class Analyzer:
         cbar.set_label('Sharpe Ratio')
 
         for i, symbol in enumerate(self.portfolio.symbols):
-            ax.annotate(symbol, (asset_volatilities[i], asset_returns[i]), xytext=(5, -5), textcoords='offset points')
+            ax.annotate(symbol, (asset_volatilities.iloc[i], asset_returns.iloc[i]), xytext=(5, -5), textcoords='offset points')
 
         # Plot current portfolio
         portfolio_return = (self.portfolio.returns * self.portfolio.weights).sum(axis=1).mean() * 252
@@ -691,7 +691,7 @@ class Analyzer:
         portfolio_returns = (self.portfolio.returns * self.portfolio.weights).sum(axis=1)
         
         # Create monthly returns matrix
-        monthly_returns = portfolio_returns.resample('M').apply(lambda x: (1 + x).prod() - 1)
+        monthly_returns = portfolio_returns.resample('ME').apply(lambda x: (1 + x).prod() - 1)
         
         if len(monthly_returns) == 0:
             # Create empty chart if no data
@@ -905,8 +905,8 @@ class Analyzer:
         correlation_matrix = self.portfolio.returns.corr()
         
         # Create stressed correlation matrix (increase all correlations)
-        stressed_corr = correlation_matrix * 1.5
-        np.fill_diagonal(stressed_corr.values, 1.0)
+        stressed_corr = correlation_matrix.to_numpy(copy=True) * 1.5
+        np.fill_diagonal(stressed_corr, 1.0)
         
         return {
             'average_correlation': correlation_matrix.values[np.triu_indices_from(correlation_matrix.values, k=1)].mean(),

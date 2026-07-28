@@ -15,7 +15,7 @@ A comprehensive Python package for portfolio analytics, optimization, and risk m
 ## 📦 Installation
 
 ### Prerequisites
-- Python 3.8 or higher
+- Python 3.12 or higher
 - pip package manager
 
 ### Setup Virtual Environment
@@ -32,11 +32,8 @@ source .venv/bin/activate
 # On Windows:
 .venv\Scripts\activate
 
-# Install dependencies
-pip install -r requirements.txt
-
-# Install the package in development mode
-pip install -e .
+# Install the package and development dependencies
+pip install -e ".[dev]"
 ```
 
 ## 🎯 Quick Start
@@ -180,7 +177,6 @@ PortfolioAnalyticsAI/
 ├── notebooks/
 │   └── 01_getting_started.ipynb  # Interactive examples
 ├── example.py                    # Complete usage example
-├── requirements.txt              # Package dependencies
 ├── pyproject.toml               # Project configuration
 └── README.md                    # This file
 ```
@@ -207,15 +203,9 @@ Creates static and interactive visualizations.
 
 ## 🔧 Dependencies
 
-- **numpy**: Numerical computations
-- **pandas**: Data manipulation and analysis
-- **matplotlib**: Static plotting
-- **seaborn**: Statistical visualizations
-- **plotly**: Interactive charts
-- **scikit-learn**: Machine learning utilities
-- **yfinance**: Yahoo Finance data
-- **scipy**: Scientific computing
-- **jupyter**: Interactive notebooks
+Runtime and development dependencies are declared in `pyproject.toml`. Install the
+package with `pip install -e .`, or include notebook and development tooling with
+`pip install -e ".[dev]"`.
 
 ## 📋 Development
 
